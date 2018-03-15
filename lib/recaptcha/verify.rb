@@ -25,16 +25,36 @@ module Recaptcha
         end
 
         Timeout::timeout(options[:timeout] || 3) do
-          recaptcha = http.post_form(URI.parse(Recaptcha.configuration.verify_url), {
-            "privatekey" => private_key,
-            "remoteip"   => request.remote_ip,
-            "challenge"  => params[:recaptcha_challenge_field],
-            "response"   => params[:recaptcha_response_field]
-          })
+          # recaptcha = http.post_form(URI.parse(Recaptcha.configuration.verify_url), {
+          #   "privatekey" => private_key,
+          #   "remoteip"   => request.remote_ip,
+          #   "challenge"  => params[:recaptcha_challenge_field],
+          #   "response"   => params[:recaptcha_response_field]
+          # })
+
+          verify_hash = {
+            "secret" => private_key,
+            "response" => params["g-recaptcha-response"],
+            "remoteip" => request.remote_ip
+          }
+          #Rails.logger.info(verify_hash.inspect)
+          query = verify_hash.map{|k,v| [k,v]}.inject([]) {|memo, pair| memo << "#{pair[0]}=#{pair[1]}"; memo }.join("&")
+          contentURI = URI.parse(Recaptcha.configuration.verify_url + "?" + query)
+          request = Net::HTTP::Get.new(contentURI.request_uri)
+
+          https = Net::HTTP.new(contentURI.host, contentURI.port)
+          https.use_ssl = true if contentURI.port == 443
+          recaptcha = https.start{|cx| cx.request(request) }
+          #Rails.logger.info(recaptcha.body.inspect)
+          recaptcha
         end
-        answer, error = recaptcha.body.split.map { |s| s.chomp }
-        unless answer == 'true'
-          flash[:recaptcha_error] = error
+        json = JSON.parse(recaptcha.body)
+        answer = json["success"]
+        error = json["error-codes"]
+        #answer, error = recaptcha.body.split.map { |s| s.chomp }
+        unless answer == true
+          #flash[:recaptcha_error] = error
+          flash[:recaptcha_error] = error ? Array(error).join(",") : ""
           if model
             message = "Word verification response is incorrect, please try again."
             message = I18n.translate(:'recaptcha.errors.verification_failed', {:default => message}) if defined?(I18n)
